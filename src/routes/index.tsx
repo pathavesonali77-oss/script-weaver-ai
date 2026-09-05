@@ -54,19 +54,17 @@ const SAMPLE = `(0:00)Henan की कहानी असुरा का उद
 /* Pipeline tuning                                                     */
 /* ------------------------------------------------------------------ */
 
-/** Script lines per analysed chunk — one image prompt is still written per line. */
-const BATCH = 15;
 /**
- * Chunks being storyboarded at the same time.
+ * Script lines written per prompt pass.
  *
- * MEASURED BUDGET: the text provider allows 5 requests per minute PER KEY, so 7
- * keys carry 35 text calls a minute in total. Each 15-line chunk costs exactly
- * two of them — one analysis (sequential, for continuity) and one prompt-writing
- * call — so the pipeline is capped at ~17 chunks a minute no matter how wide we
- * fan out. Writing runs on 6 lanes and leaves the 7th key's quota for the
- * analysis lane, so a brief never queues behind a wave of writing calls.
+ * There is no chunk analysis any more: Gemini reads the ENTIRE script on every
+ * pass and only writes this many prompts at a time, because the reply length —
+ * not the script length — is the real ceiling. Passes run one after another,
+ * since the engine keeps a single key active at a time (5 requests/minute).
  */
-const PROMPT_CONCURRENCY = 6;
+const PROMPT_RANGE = 30;
+
+
 
 
 /**
