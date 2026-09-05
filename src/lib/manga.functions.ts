@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { parseScript } from "./script";
-import { buildCharacterBible, writePrompts, generateImage, generateCheckedImage } from "./manga.server";
+import { buildCharacterBible, writePrompts, generateImage } from "./manga.server";
 import { geminiStatus } from "./gemini.server";
 
 const SegmentSchema = z.object({
