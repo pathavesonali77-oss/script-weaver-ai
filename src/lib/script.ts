@@ -82,15 +82,9 @@ export function parseScript(raw: string): Segment[] {
   const push = (start: number, end: number, text: string) => {
     if (end <= start) return;
     if (!text) {
-      // No dialogue in this span. One timestamp = one panel, so it still gets
-      // its OWN image: a continuation beat of the previous line. Only a span
-      // too short to render is folded into the previous panel (its time is
-      // never dropped, so the video can't come out shorter than the script).
+      // No dialogue in this span. One timestamp = one panel, ALWAYS: even a very
+      // short span keeps its own image as a continuation beat of the previous line.
       const last = rawSegs[rawSegs.length - 1];
-      if (end - start < MIN_PANEL && last) {
-        last.end = end;
-        return;
-      }
       if (last) {
         rawSegs.push({
           start,
@@ -105,6 +99,7 @@ export function parseScript(raw: string): Segment[] {
     }
     rawSegs.push({ start, end, text });
   };
+
 
 
   for (let i = 0; i < marks.length - 1; i++) {
