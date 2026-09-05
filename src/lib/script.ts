@@ -223,29 +223,25 @@ export function buildTimeline(shots: PanelSource[], targetSeconds?: number): Tim
     resolved.push({ url: pick!.url as string, prompt: pick!.prompt });
   }
 
-  // 3. lay them out, merging anything under MIN_PANEL forward
+  // 3. lay them out. EVERY panel is kept — one image per timestamp, always.
+  // A span shorter than MIN_PANEL is stretched to MIN_PANEL and later panels
+  // shift forward, so no image is ever dropped from the video.
   const panels: Panel[] = [];
+  let cursor = t0;
   for (let i = 0; i < resolved.length; i++) {
-    const start = bounds[i]!;
-    const end = bounds[i + 1]!;
-    const prev = panels[panels.length - 1];
-    if (end - start < MIN_PANEL && prev) {
-      prev.end = end;
-      continue;
-    }
-    panels.push({ url: resolved[i]!.url, start, end, prompt: resolved[i]!.prompt });
-  }
-  if (panels.length > 1 && panels[0]!.end - panels[0]!.start < MIN_PANEL) {
-    const first = panels.shift()!;
-    panels[0]!.start = first.start;
+    const end = quantise(Math.max(bounds[i + 1]!, cursor + MIN_PANEL));
+    panels.push({ url: resolved[i]!.url, start: cursor, end, prompt: resolved[i]!.prompt });
+    cursor = end;
   }
   if (panels.length === 0) return { panels: [], total: 0, substituted };
 
-  // 4. hard guarantee: first panel starts at t0, last ends at tEnd
+  // 4. hard guarantee: first panel starts at t0, last ends at the script end
+  // (or later, if minimum panel lengths pushed past it — never earlier).
   panels[0]!.start = t0;
-  panels[panels.length - 1]!.end = tEnd;
+  const lastPanel = panels[panels.length - 1]!;
+  lastPanel.end = quantise(Math.max(tEnd, lastPanel.start + MIN_PANEL));
 
-  return { panels, total: quantise(tEnd - t0), substituted };
+  return { panels, total: quantise(lastPanel.end - t0), substituted };
 }
 
 /** Sum of the panel durations exactly as the encoders will render them. */
