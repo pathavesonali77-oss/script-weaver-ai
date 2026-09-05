@@ -466,12 +466,19 @@ function Index() {
           const { prompts } = await getPrompts({
             data: {
               bible,
-              segments: [{ index: shot.index, start: shot.start, end: shot.end, text: shot.text }],
-              slot: keyTick++,
+              from: shot.index + 1,
+              to: shot.index + 1,
+              segments: shotsRef.current.map((s) => ({
+                index: s.index,
+                start: s.start,
+                end: s.end,
+                text: s.text,
+              })),
             },
           });
           prompt = prompts[0] as string;
         }
+
         const { url } = await draw({
           data: { prompt, seed: 7000 + shot.index, slot: keyTick++, bible },
         });
