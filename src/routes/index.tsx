@@ -231,13 +231,21 @@ function Index() {
       const pending = list.filter((s) => s.status !== "done" || !s.url);
       const total = list.length;
 
-      // Stage 1: prompts for everything still missing one, in small parallel
-      // batches. Stage 2 drains a shared queue as soon as prompts land, so
-      // image rendering starts within seconds instead of after the last batch.
+      // Stage 1: prompts. The model reads the WHOLE script on every pass and
+      // only writes the prompts for one range of line numbers (the answer, not
+      // the input, is what has a size ceiling). Passes run one after another
+      // because the Gemini engine uses a single key at a time.
+      // Stage 2 drains a shared queue as soon as prompts land, so image
+      // rendering starts within seconds instead of after the last pass.
       const needPrompts = pending.filter((s) => !s.prompt);
-      const batches: Segment[][] = [];
-      for (let i = 0; i < needPrompts.length; i += BATCH)
-        batches.push(needPrompts.slice(i, i + BATCH));
+      const ranges: { from: number; to: number }[] = [];
+      for (let i = 0; i < needPrompts.length; i += PROMPT_RANGE) {
+        const slice = needPrompts.slice(i, i + PROMPT_RANGE);
+        ranges.push({
+          from: (slice[0] as Shot).index + 1,
+          to: (slice[slice.length - 1] as Shot).index + 1,
+        });
+      }
 
       let promptDone = total - needPrompts.length;
       let drawn = list.filter((s) => s.status === "done").length;
@@ -264,7 +272,7 @@ function Index() {
        */
       const MAX_IMAGE_ATTEMPTS = 10;
 
-      let promptingDone = batches.length === 0;
+      let promptingDone = ranges.length === 0;
 
       const record = (index: number, next: Partial<Shot>) => {
         list = list.map((x) => (x.index === index ? { ...x, ...next } : x));
@@ -279,127 +287,51 @@ function Index() {
         void saveProgress(key, { bible: b, shots: list });
       };
 
-      // Chunk stage, two lanes:
-      //  1. ANALYSIS is strictly sequential, chunk by chunk in script order.
-      //     Every chunk brief is handed the previous brief plus its handover
-      //     STATE (place, time of day, weather, clothing, who is together), so
-      //     the whole script is analysed as ONE continuous world. This is the
-      //     fix for panels that used to jump to a different place or time at
-      //     each chunk boundary.
-      //  2. PROMPT WRITING (the slow call) starts the moment a brief is ready
-      //     and runs several chunks at once, one Paralon key each.
-      const writePromptsFor = async (batch: Segment[], slot: number, ctx: string, brief: string) => {
-        if (cancelRef.current) return;
-        try {
-          const res = await getPrompts({
-            data: {
-              bible: b,
-              context: ctx,
-              brief,
-              segments: batch.map((s) => ({
-                index: s.index,
-                start: s.start,
-                end: s.end,
-                text: s.text,
-              })),
-              slot,
-            },
-          });
-
-          const prompts = res.prompts as string[];
-          batch.forEach((s, i) => {
-            const prompt = prompts[i];
-            if (!prompt) {
-              record(s.index, { status: "error", error: "no prompt" });
-              return;
-            }
-            record(s.index, { prompt, status: "waiting" });
-            queue.push({ seg: s as Shot, prompt, attempts: 0 });
-          });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          batch.forEach((s) => record(s.index, { status: "error", error: msg }));
-        }
-        promptDone += batch.length;
-        tick();
-      };
-
-      // Last LOCATION seen in a chunk brief's BEATS block — carried forward so
-      // the next chunk starts in the same place instead of drifting.
-      const lastLocation = (brief: string): string => {
-        const re = /^\s*\d+\s*[).:-]\s*LOCATION\s*:\s*([^|\n]+)/gim;
-        let m: RegExpExecArray | null;
-        let found = "";
-        while ((m = re.exec(brief)) !== null) found = (m[1] ?? "").trim();
-        return found.replace(/[.,;]+$/, "").slice(0, 80);
-      };
-      const stateOf = (brief: string): string => {
-        const m = /^\s*STATE\s*:\s*([^\n]+)/im.exec(brief);
-        return m ? (m[1] ?? "").trim().slice(0, 400) : "";
-      };
+      const allSegments = list.map((s) => ({
+        index: s.index,
+        start: s.start,
+        end: s.end,
+        text: s.text,
+      }));
 
       const promptStage = (async () => {
-        let carry = "";
-        let carryState = "";
-        let carryLocation = "";
-        const inFlight = new Set<Promise<void>>();
-
-        for (const batch of batches) {
+        for (const range of ranges) {
           if (cancelRef.current) break;
-          const first = batch[0]!.index;
-          const lines = list
-            .filter((s) => s.index >= first - 4 && s.index < first)
-            .map((s) => `[${fmt(s.start)}] ${s.text}`)
-            .join("\n");
-          const loc = carryLocation
-            ? `CURRENT LOCATION (the scene is still here — keep it unless a script line clearly moves it): ${carryLocation}`
-            : "";
-          const st = carryState
-            ? `CONTINUITY STATE handed over from the previous chunk — this chunk starts exactly here and keeps it ` +
-              `until a script line changes it: ${carryState}`
-            : "";
-          const ctx = [st, loc, carry, lines].filter(Boolean).join("\n\n").slice(0, 7500);
-
-          let brief = "";
+          const targets = list.filter(
+            (s) => s.index + 1 >= range.from && s.index + 1 <= range.to && !s.prompt,
+          );
+          if (targets.length === 0) continue;
+          targets.forEach((s) => record(s.index, { status: "prompting" }));
           try {
-            const res = await getBrief({
+            const res = await getPrompts({
               data: {
                 bible: b,
-                context: ctx,
-                segments: batch.map((s) => ({
-                  index: s.index,
-                  start: s.start,
-                  end: s.end,
-                  text: s.text,
-                })),
-                slot: keyTick++,
+                from: range.from,
+                to: range.to,
+                segments: allSegments,
               },
             });
-            brief = ((res as { brief?: string }).brief ?? "").trim();
-          } catch {
-            brief = "";
+            const prompts = res.prompts as string[];
+            targets.forEach((s) => {
+              const prompt = prompts[s.index + 1 - range.from];
+              if (!prompt) {
+                record(s.index, { status: "error", error: "no prompt" });
+                return;
+              }
+              record(s.index, { prompt, status: "waiting" });
+              queue.push({ seg: s as Shot, prompt, attempts: 0 });
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            targets.forEach((s) => record(s.index, { status: "error", error: msg }));
           }
-
-          if (brief) {
-            carry = brief.slice(0, 1600);
-            const nextState = stateOf(brief);
-            if (nextState) carryState = nextState;
-            const nextLoc = lastLocation(brief);
-            if (nextLoc) carryLocation = nextLoc;
-          }
-
-          // Fan the slow prompt-writing call out while the next brief is analysed.
-          const task = writePromptsFor(batch, keyTick++, ctx, brief).finally(() => {
-            inFlight.delete(task);
-          });
-          inFlight.add(task);
-          if (inFlight.size >= PROMPT_CONCURRENCY) await Promise.race(inFlight);
+          promptDone += targets.length;
+          tick();
         }
-        await Promise.all(inFlight);
       })().then(() => {
-
         promptingDone = true;
       });
+
 
 
 
