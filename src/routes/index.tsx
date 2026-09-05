@@ -326,6 +326,40 @@ function Index() {
           promptDone += targets.length;
           tick();
         }
+
+        // Repair sweep: one timestamp = one image, in any condition. Any line
+        // that still has no prompt (model skipped it, or the pass failed) is
+        // asked for again in small groups until every line has one.
+        for (let round = 0; round < 3; round++) {
+          if (cancelRef.current) break;
+          const missing = list.filter((s) => !s.prompt);
+          if (missing.length === 0) break;
+          for (let i = 0; i < missing.length; i += 10) {
+            if (cancelRef.current) break;
+            const slice = missing.slice(i, i + 10);
+            const from = (slice[0] as Shot).index + 1;
+            const to = (slice[slice.length - 1] as Shot).index + 1;
+            slice.forEach((s) => record(s.index, { status: "prompting", error: undefined }));
+            try {
+              const res = await getPrompts({
+                data: { bible: b, from, to, segments: allSegments },
+              });
+              const prompts = res.prompts as string[];
+              slice.forEach((s) => {
+                const prompt = prompts[s.index + 1 - from];
+                if (!prompt) return;
+                record(s.index, { prompt, status: "waiting", error: undefined });
+                queue.push({ seg: s as Shot, prompt, attempts: 0 });
+              });
+            } catch {
+              /* next round retries */
+            }
+            list
+              .filter((s) => !s.prompt && s.index + 1 >= from && s.index + 1 <= to)
+              .forEach((s) => record(s.index, { status: "error", error: "no prompt" }));
+            tick();
+          }
+        }
       })().then(() => {
         promptingDone = true;
       });
