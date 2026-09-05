@@ -495,10 +495,9 @@ function Index() {
   }
 
   /**
-   * Re-rolls a single panel. The whole 15-line chunk this panel belongs to is
-   * re-analysed (with the preceding chunk's lines as context) so the chunk
-   * brief is regenerated and the new prompt still fits the story, then only
-   * this panel is re-rendered on a fresh seed. Timestamps stay untouched.
+   * Re-rolls a single panel. The prompt is rewritten with the WHOLE script in
+   * context, so the new panel still fits the story, then only this panel is
+   * re-rendered on a fresh seed. Timestamps stay untouched.
    */
   async function retryOne(index: number) {
     if (retrying.includes(index)) return;
@@ -514,31 +513,24 @@ function Index() {
       const target = list.find((s) => s.index === index);
       if (!target) return;
 
-      // rebuild the panel's chunk, aligned on BATCH boundaries
-      const first = Math.floor(index / BATCH) * BATCH;
-      const chunk = list.filter((s) => s.index >= first && s.index < first + BATCH);
-      const context = list
-        .filter((s) => s.index >= first - BATCH && s.index < first)
-        .map((s) => `[${fmt(s.start)}] ${s.text}`)
-        .join("\n");
-
       record(index, { status: "prompting", error: undefined });
 
       const { prompts } = await getPrompts({
         data: {
           bible,
-          context,
-          segments: chunk.map((s) => ({
+          from: index + 1,
+          to: index + 1,
+          segments: list.map((s) => ({
             index: s.index,
             start: s.start,
             end: s.end,
             text: s.text,
           })),
-          slot: index,
         },
       });
-      const prompt = prompts[chunk.findIndex((s) => s.index === index)] as string | undefined;
+      const prompt = prompts[0] as string | undefined;
       if (!prompt) throw new Error("no prompt");
+
 
       record(index, { prompt, status: "drawing" });
       const { url } = await draw({
