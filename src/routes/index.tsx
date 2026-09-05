@@ -62,7 +62,7 @@ const SAMPLE = `(0:00)Henan की कहानी असुरा का उद
  * not the script length — is the real ceiling. Passes run one after another,
  * since the engine keeps a single key active at a time (5 requests/minute).
  */
-const PROMPT_RANGE = 30;
+const PROMPT_RANGE = 60;
 
 
 

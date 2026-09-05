@@ -92,11 +92,21 @@ export function geminiChat(user: string, opts: ChatOptions = {}): Promise<string
 
 async function callGemini(user: string, opts: ChatOptions): Promise<string> {
   const keys = geminiKeys();
-  const attempts = opts.attempts ?? Math.max(6, keys.length * 2);
+  const attempts = opts.attempts ?? Math.max(12, keys.length * 4);
   let lastErr = "";
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const picked = pickModelAndKey(keys);
+    let picked = pickModelAndKey(keys);
+    if (!picked) {
+      // Every key is parked. If some are only on a short rate-limit cooldown,
+      // wait for the first one to come back instead of failing the run.
+      const soonest = earliestFree(keys);
+      const wait = soonest - Date.now();
+      if (wait > 0 && wait <= 120_000) {
+        await sleep(wait + 500);
+        picked = pickModelAndKey(keys);
+      }
+    }
     if (!picked) {
       throw new Error(
         "Every Gemini key has hit its daily quota on every model. Try again after the daily reset (midnight UTC).",
@@ -138,7 +148,12 @@ async function callGemini(user: string, opts: ChatOptions): Promise<string> {
           .map((p) => p.text ?? "")
           .join("")
           .trim();
-        if (text) return text;
+        if (text) {
+          // Hand the next call to the next key: the 5-requests-per-minute gap
+          // is per key, so rotating spreads the wait across the whole pool.
+          advanceKey(keys.length);
+          return text;
+        }
         lastErr = "empty completion";
         continue;
       }
@@ -151,12 +166,15 @@ async function callGemini(user: string, opts: ChatOptions): Promise<string> {
           // Daily quota gone on this key: park it until the reset and move to
           // the next key (never in parallel — just the next one in line).
           slot.exhaustedUntil = nextDailyReset();
-          advanceKey(keys.length);
         } else {
-          // Per-minute limit: wait it out on the same key.
-          const m = /"?retryDelay"?:\s*"?(\d+)s/i.exec(body);
-          await sleep(Math.min(70_000, (m ? Number(m[1]) : 25) * 1000 + 1500));
+          // Any other rate limit (per-minute / free-tier burst): park THIS key
+          // for the delay Google asks for and hand the work to the next key
+          // straight away instead of blocking the whole queue on one key.
+          const m = /"?retryDelay"?:\s*"?(\d+(?:\.\d+)?)s/i.exec(body);
+          const wait = Math.min(90_000, (m ? Number(m[1]) : 30) * 1000 + 2000);
+          slot.exhaustedUntil = Date.now() + wait;
         }
+        advanceKey(keys.length);
         continue;
       }
       if (res.status === 404) {
@@ -206,9 +224,19 @@ function pickModelAndKey(keys: string[]): { model: string; key: string } | null 
 }
 
 function advanceKey(total: number) {
+  // Just hand the baton to the next key; pickModelAndKey steps down to the
+  // next model on its own once every key is parked for the current one.
   keyIdx = (keyIdx + 1) % total;
-  // A full lap means this model is spent for the day on every key.
-  if (keyIdx === 0) modelIdx = (modelIdx + 1) % MODELS.length;
+}
+
+/** Soonest moment any model/key slot becomes usable again. */
+function earliestFree(keys: string[]): number {
+  let soonest = Infinity;
+  for (const model of MODELS) {
+    if (deadModels.has(model)) continue;
+    for (const key of keys) soonest = Math.min(soonest, slotFor(model, key).exhaustedUntil);
+  }
+  return soonest;
 }
 
 /** Small status read-out for the UI. */
