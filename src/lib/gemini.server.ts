@@ -96,7 +96,17 @@ async function callGemini(user: string, opts: ChatOptions): Promise<string> {
   let lastErr = "";
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const picked = pickModelAndKey(keys);
+    let picked = pickModelAndKey(keys);
+    if (!picked) {
+      // Every key is parked. If some are only on a short rate-limit cooldown,
+      // wait for the first one to come back instead of failing the run.
+      const soonest = earliestFree(keys);
+      const wait = soonest - Date.now();
+      if (wait > 0 && wait <= 120_000) {
+        await sleep(wait + 500);
+        picked = pickModelAndKey(keys);
+      }
+    }
     if (!picked) {
       throw new Error(
         "Every Gemini key has hit its daily quota on every model. Try again after the daily reset (midnight UTC).",
