@@ -110,8 +110,8 @@ async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>
 
 function Index() {
   const analyze = useServerFn(analyzeScript);
-  const getPrompts = useServerFn(promptsForBatch);
-  const getBrief = useServerFn(briefForBatch);
+  const getPrompts = useServerFn(promptsForRange);
+
   const draw = useServerFn(renderImage);
   const drawBatch = useServerFn(renderBatch);
 
