@@ -148,7 +148,12 @@ async function callGemini(user: string, opts: ChatOptions): Promise<string> {
           .map((p) => p.text ?? "")
           .join("")
           .trim();
-        if (text) return text;
+        if (text) {
+          // Hand the next call to the next key: the 5-requests-per-minute gap
+          // is per key, so rotating spreads the wait across the whole pool.
+          advanceKey(keys.length);
+          return text;
+        }
         lastErr = "empty completion";
         continue;
       }
