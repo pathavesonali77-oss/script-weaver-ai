@@ -92,7 +92,7 @@ export function geminiChat(user: string, opts: ChatOptions = {}): Promise<string
 
 async function callGemini(user: string, opts: ChatOptions): Promise<string> {
   const keys = geminiKeys();
-  const attempts = opts.attempts ?? Math.max(6, keys.length * 2);
+  const attempts = opts.attempts ?? Math.max(12, keys.length * 4);
   let lastErr = "";
 
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -219,9 +219,19 @@ function pickModelAndKey(keys: string[]): { model: string; key: string } | null 
 }
 
 function advanceKey(total: number) {
+  // Just hand the baton to the next key; pickModelAndKey steps down to the
+  // next model on its own once every key is parked for the current one.
   keyIdx = (keyIdx + 1) % total;
-  // A full lap means this model is spent for the day on every key.
-  if (keyIdx === 0) modelIdx = (modelIdx + 1) % MODELS.length;
+}
+
+/** Soonest moment any model/key slot becomes usable again. */
+function earliestFree(keys: string[]): number {
+  let soonest = Infinity;
+  for (const model of MODELS) {
+    if (deadModels.has(model)) continue;
+    for (const key of keys) soonest = Math.min(soonest, slotFor(model, key).exhaustedUntil);
+  }
+  return soonest;
 }
 
 /** Small status read-out for the UI. */
