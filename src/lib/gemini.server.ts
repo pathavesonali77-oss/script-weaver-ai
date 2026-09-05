@@ -151,12 +151,15 @@ async function callGemini(user: string, opts: ChatOptions): Promise<string> {
           // Daily quota gone on this key: park it until the reset and move to
           // the next key (never in parallel — just the next one in line).
           slot.exhaustedUntil = nextDailyReset();
-          advanceKey(keys.length);
         } else {
-          // Per-minute limit: wait it out on the same key.
-          const m = /"?retryDelay"?:\s*"?(\d+)s/i.exec(body);
-          await sleep(Math.min(70_000, (m ? Number(m[1]) : 25) * 1000 + 1500));
+          // Any other rate limit (per-minute / free-tier burst): park THIS key
+          // for the delay Google asks for and hand the work to the next key
+          // straight away instead of blocking the whole queue on one key.
+          const m = /"?retryDelay"?:\s*"?(\d+(?:\.\d+)?)s/i.exec(body);
+          const wait = Math.min(90_000, (m ? Number(m[1]) : 30) * 1000 + 2000);
+          slot.exhaustedUntil = Date.now() + wait;
         }
+        advanceKey(keys.length);
         continue;
       }
       if (res.status === 404) {
