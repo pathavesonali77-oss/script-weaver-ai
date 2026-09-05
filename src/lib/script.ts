@@ -118,25 +118,10 @@ export function parseScript(raw: string): Segment[] {
     push(last.time, last.time + dur, tail);
   }
 
-  // Merge spans shorter than one panel into their neighbour so every segment is
-  // renderable while the overall span stays identical.
-  const merged: Raw[] = [];
-  for (const s of rawSegs) {
-    const prev = merged[merged.length - 1];
-    if (prev && s.end - s.start < MIN_PANEL) {
-      prev.end = s.end;
-      prev.text = `${prev.text} ${s.text}`.trim();
-      continue;
-    }
-    merged.push({ ...s });
-  }
-  if (merged.length > 1 && merged[0]!.end - merged[0]!.start < MIN_PANEL) {
-    const first = merged.shift()!;
-    merged[0]!.start = first.start;
-    merged[0]!.text = `${first.text} ${merged[0]!.text}`.trim();
-  }
-
-  return merged.map((s, i) => ({
+  // NOTHING is merged: every timestamp span keeps its own segment, so the run
+  // always produces exactly one image per timestamp. Spans shorter than one
+  // panel are given the minimum panel length when the timeline is built.
+  return rawSegs.map((s, i) => ({
     index: i,
     start: quantise(s.start),
     end: quantise(s.end),
