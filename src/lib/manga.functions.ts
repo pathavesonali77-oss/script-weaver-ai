@@ -93,14 +93,11 @@ export const renderBatch = createServerFn({ method: "POST" })
     const results = await Promise.all(
       data.jobs.map(async (job) => {
         try {
-          const out = await generateCheckedImage(
-            job.prompt,
-            job.seed,
-            job.slot,
-            data.bible,
-            job.line,
-          );
-          return { index: job.index, url: out.url, prompt: out.prompt };
+          // No text-model review here: the Gemini engine runs ONE request at a
+          // time, so a per-panel review call queues behind every prompt pass
+          // and images stop appearing entirely. Render straight away.
+          const url = await generateImage(job.prompt, job.seed, job.slot, data.bible);
+          return { index: job.index, url, prompt: job.prompt };
         } catch (e) {
           return {
             index: job.index,
